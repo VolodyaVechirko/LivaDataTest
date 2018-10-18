@@ -1,18 +1,18 @@
 package com.vvechirko.livadatatest
 
+import androidx.fragment.app.Fragment
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.Observer
 import io.reactivex.Completable
 import io.reactivex.Observable
-import io.reactivex.disposables.Disposable
+import io.reactivex.disposables.CompositeDisposable
 
 typealias Data<T> = (data: T?) -> Unit
 typealias DataPage<T> = (data: T?, page: Int) -> Unit
 typealias Error = (error: String) -> Unit
 typealias Loading = (b: Boolean) -> Unit
 typealias Empty = () -> Unit
-typealias Dispose = ((Disposable) -> Unit)
 
 const val PAGE_START = 1
 const val PAGE_NONE = -1
@@ -26,7 +26,23 @@ enum class Status {
 fun ErrorParser(t: Throwable?) = t?.message ?: t.toString()
 
 
+/**     Response<T> for rx.Observable<T> + Pagination
+ *
+ *      ViewModel:
+ *      val data: PagingResponseData<String> = PagingResponseData()
+ *      data.from(Observable.just("ololo"), page)
+ *
+ *      Activity/Fragment:
+ *      data.observeResponse(this,
+ *          { data, page -> ... },
+ *          { error -> ... },
+ *          { b -> ... }
+ *      )
+ */
+
 class PagingResponseData<T> : LiveData<Response<List<T>>>() {
+
+    val disposable = CompositeDisposable()
 
     var currentPage: Int = PAGE_NONE
     val allItems: MutableList<T> = mutableListOf()
@@ -35,12 +51,13 @@ class PagingResponseData<T> : LiveData<Response<List<T>>>() {
         get() = currentPage == PAGE_NONE
 
     fun observeResponse(owner: LifecycleOwner, success: DataPage<List<T>>? = null, error: Error? = null, loading: Loading? = null) {
-        removeObservers(owner)
+        val viewLifecycleOwner = (owner as? Fragment)?.viewLifecycleOwner ?: owner
+
         if (currentPage != PAGE_NONE) {
             value = Response.success(allItems, currentPage)
         }
 
-        observe(owner, Observer<Response<List<T>>> {
+        observe(viewLifecycleOwner, Observer<Response<List<T>>> {
             when (it?.status) {
                 Status.SUCCESS -> {
                     if (it.page != currentPage) {
@@ -61,23 +78,27 @@ class PagingResponseData<T> : LiveData<Response<List<T>>>() {
         })
     }
 
-    fun from(observable: Observable<List<T>>, page: Int, dispose: Dispose? = null) {
+    override fun onInactive() {
+        disposable.clear()
+    }
+
+    fun from(observable: Observable<List<T>>, page: Int) {
         observable
-                .doOnSubscribe { value = Response.loading() }
-                .subscribe(
-                        { data -> value = Response.success(data, page) },
-                        { t -> value = Response.error(t) }
+            .doOnSubscribe { value = Response.loading() }
+            .subscribe(
+                { data -> value = Response.success(data, page) },
+                { t -> value = Response.error(t) }
 //                        { t -> postValue(Response.error(ErrorParser.parse(t))) }
-                ).also { dispose?.invoke(it) }
+            ).also { disposable.add(it) }
     }
 }
 
 
-/**     Response<T> for Observable<T>
+/**     Response<T> for rx.Observable<T>
  *
  *      ViewModel:
  *      val data: ResponseData<String> = ResponseData()
- *      data.adapt(Observable.just("ololo"))
+ *      data.from(Observable.just("ololo"))
  *
  *      Activity/Fragment:
  *      data.observeResponse(this,
@@ -85,6 +106,101 @@ class PagingResponseData<T> : LiveData<Response<List<T>>>() {
  *          { error -> ... },
  *          { b -> ... }
  *      )
+ */
+
+class ResponseData<T> : LiveData<Response<T>>() {
+
+    val disposable = CompositeDisposable()
+
+    fun observeResponse(owner: LifecycleOwner, success: Data<T>? = null, error: Error? = null, loading: Loading? = null) {
+        val viewLifecycleOwner = (owner as? Fragment)?.viewLifecycleOwner ?: owner
+
+        observe(viewLifecycleOwner, Observer {
+            when (it?.status) {
+                Status.SUCCESS -> {
+                    loading?.invoke(false)
+                    success?.invoke(it.data)
+                }
+                Status.ERROR -> {
+                    loading?.invoke(false)
+                    error?.invoke(ErrorParser(it.error))
+                }
+                Status.LOADING -> loading?.invoke(true)
+            }
+        })
+    }
+
+    fun from(observable: Observable<T>) {
+        observable
+            .doOnSubscribe { value = Response.loading() }
+            .subscribe(
+                { data -> value = Response.success(data) },
+                { t -> value = Response.error(t) }
+//                        { t -> postValue(Response.error(ErrorParser.parse(t))) }
+            ).also { disposable.add(it) }
+    }
+
+    override fun onInactive() {
+        disposable.clear()
+    }
+}
+
+
+/**     ActionData for rx.Completable
+ *
+ *      ViewModel:
+ *      val data: ActionData = ActionData()
+ *      data.from(Completable.complete())
+ *
+ *      Activity/Fragment:
+ *      data.observeAction(this,
+ *          { ... },
+ *          { error -> ... },
+ *          { b -> ... }
+ *      )
+ */
+
+class ActionData : LiveData<Action>() {
+
+    val disposable = CompositeDisposable()
+
+    fun observeAction(owner: LifecycleOwner, success: Empty? = null, error: Error? = null, loading: Loading? = null) {
+        val viewLifecycleOwner = (owner as? Fragment)?.viewLifecycleOwner ?: owner
+
+        observe(viewLifecycleOwner, Observer {
+            when (it?.status) {
+                Status.SUCCESS -> {
+                    loading?.invoke(false)
+                    success?.invoke()
+                }
+                Status.ERROR -> {
+                    loading?.invoke(false)
+                    error?.invoke(ErrorParser(it.error))
+                }
+                Status.LOADING -> loading?.invoke(true)
+            }
+        })
+    }
+
+    override fun onInactive() {
+        disposable.clear()
+    }
+
+    fun from(completable: Completable, resettable: Boolean = true) {
+        completable
+            .doOnSubscribe { value = Action.loading() }
+            .doAfterTerminate { if (resettable) value = null }
+            .subscribe(
+                { value = Action.success() },
+                { t -> value = Action.error(t) }
+//                        { t -> postValue(Action.error(ErrorParser.parse(t))) }
+            ).also { disposable.add(it) }
+    }
+}
+
+
+/**
+ *      Response<T> for Observable<T> + Pagination
  */
 
 class Response<T>(val status: Status, val data: T? = null, val page: Int = PAGE_NONE, val error: Throwable? = null) {
@@ -97,53 +213,9 @@ class Response<T>(val status: Status, val data: T? = null, val page: Int = PAGE_
     }
 }
 
-class ResponseObserver<T>(val success: Data<T>? = null, val error: Error? = null, val loading: Loading? = null) : Observer<Response<T>> {
 
-    override fun onChanged(t: Response<T>?) {
-        when (t?.status) {
-            Status.SUCCESS -> {
-                loading?.invoke(false)
-                success?.invoke(t.data)
-            }
-            Status.ERROR -> {
-                loading?.invoke(false)
-                error?.invoke(ErrorParser(t.error))
-            }
-            Status.LOADING -> loading?.invoke(true)
-        }
-    }
-}
-
-class ResponseData<T> : LiveData<Response<T>>() {
-
-    fun observeResponse(owner: LifecycleOwner, success: Data<T>? = null, error: Error? = null, loading: Loading? = null) {
-        observe(owner, ResponseObserver(success, error, loading))
-    }
-
-    fun from(observable: Observable<T>, dispose: Dispose? = null) {
-        observable
-                .doOnSubscribe { value = Response.loading() }
-                .subscribe(
-                        { data -> value = Response.success(data) },
-                        { t -> value = Response.error(t) }
-//                        { t -> postValue(Response.error(ErrorParser.parse(t))) }
-                ).also { dispose?.invoke(it) }
-    }
-}
-
-
-/**     Action for Completable
- *
- *      ViewModel:
- *      val data: ActionData = ActionData()
- *      data.adapt(Completable.complete())
- *
- *      Activity/Fragment:
- *      data.observeAction(this,
- *          { ... },
- *          { error -> ... },
- *          { b -> ... }
- *      )
+/**
+ *      Action for Completable
  */
 
 class Action(val status: Status, val error: Throwable? = null) {
@@ -153,40 +225,5 @@ class Action(val status: Status, val error: Throwable? = null) {
         fun error(error: Throwable?) = Action(Status.ERROR, error)
 
         fun loading() = Action(Status.LOADING)
-    }
-}
-
-class ActionObserver(val success: Empty? = null, val error: Error? = null, val loading: Loading? = null) : Observer<Action> {
-
-    override fun onChanged(t: Action?) {
-        when (t?.status) {
-            Status.SUCCESS -> {
-                loading?.invoke(false)
-                success?.invoke()
-            }
-            Status.ERROR -> {
-                loading?.invoke(false)
-                error?.invoke(ErrorParser(t.error))
-            }
-            Status.LOADING -> loading?.invoke(true)
-        }
-    }
-}
-
-class ActionData : LiveData<Action>() {
-
-    fun observeAction(owner: LifecycleOwner, success: Empty? = null, error: Error? = null, loading: Loading? = null) {
-        observe(owner, ActionObserver(success, error, loading))
-    }
-
-    fun from(completable: Completable, dispose: Dispose? = null, resettable: Boolean = true) {
-        completable
-                .doOnSubscribe { value = Action.loading() }
-                .doAfterTerminate { if (resettable) value = null }
-                .subscribe(
-                        { value = Action.success() },
-                        { t -> value = Action.error(t) }
-//                        { t -> postValue(Action.error(ErrorParser.parse(t))) }
-                ).also { dispose?.invoke(it) }
     }
 }

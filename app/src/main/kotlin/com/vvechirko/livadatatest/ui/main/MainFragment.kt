@@ -32,9 +32,9 @@ class MainFragment : Fragment() {
         swipeRefresh.setOnRefreshListener { viewModel.fetch() }
 
         viewModel.pagingData.observeResponse(this,
-                { data, page -> setData(data ?: emptyList(), page) },
-                { showError(it) },
-                { swipeRefresh.isRefreshing = it }
+            { data, page -> setData(data ?: emptyList(), page) },
+            { showError(it) },
+            { swipeRefresh.isRefreshing = it }
         )
     }
 
@@ -59,7 +59,7 @@ class Adapter : RecyclerView.Adapter<Holder>() {
     val data: MutableList<PostEntity> = mutableListOf()
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
-            Holder(LayoutInflater.from(parent.context).inflate(R.layout.item_post, parent, false))
+        Holder(LayoutInflater.from(parent.context).inflate(R.layout.item_post, parent, false))
 
     override fun getItemCount(): Int = data.size
 
